@@ -11,7 +11,7 @@ from aiogram.filters import Command
 from strategies import get_strategy, user_strategies
 
 # ========== НАСТРОЙКИ ==========
-BOT_TOKEN = "ТВОЙ_ТОКЕН_ОТ_BOTFATHER"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 TONCONNECT_URL = "https://acewolfff.github.io/ton-trader-bot/"
 
 # ========== ХРАНИЛИЩЕ ПОЛЬЗОВАТЕЛЕЙ ==========
