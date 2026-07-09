@@ -12,7 +12,7 @@ from strategies import get_strategy, user_strategies
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "ТВОЙ_ТОКЕН_ОТ_BOTFATHER"
-TONCONNECT_URL = "https://твой-домен.ru/tonconnect.html"
+TONCONNECT_URL = "https://acewolfff.github.io/ton-trader-bot/"
 
 # ========== ХРАНИЛИЩЕ ПОЛЬЗОВАТЕЛЕЙ ==========
 user_sessions = {}  # user_id -> настройки и позиции
