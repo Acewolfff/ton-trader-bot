@@ -277,14 +277,16 @@ async def cmd_start(message: types.Message):
     }
     
     await message.answer(
-        "🤖 *TON Trading Bot v4.3*\n\n"
+        "🤖 *TON Trading Bot v4.4*\n\n"
         "✅ Учёт комиссий в торговых решениях\n"
         "✅ Сигналы только если сделка прибыльна\n"
-        "✅ Своя сумма покупки/продажи\n\n"
+        "✅ Своя сумма покупки/продажи\n"
+        "✅ Исправлены зависания\n\n"
         "• 💰 Цена TON\n"
-        "• 📊 Теханализ\n"
+        "• 📊 Теханализ (RSI + EMA)\n"
         "• 📈/📉 Сделки\n"
-        "• 🤖 Авто-трейдинг\n"
+        "• ✏️ Своя сумма\n"
+        "• 🤖 Авто-трейдинг 24/7\n"
         "• 💸 Безубыток\n\n"
         "Выбери действие:",
         parse_mode="Markdown",
@@ -400,7 +402,7 @@ async def tech_analysis(callback: types.CallbackQuery):
     
     if not signal:
         await callback.message.edit_text(
-            "📊 Недостаточно данных. Нужно минимум 21 точка.",
+            "📊 Недостаточно данных. Нужно минимум 21 точка.\nПроверяй цену чаще.",
             reply_markup=main_keyboard()
         )
         return
@@ -466,11 +468,11 @@ async def buy_ton_menu(callback: types.CallbackQuery):
     
     await callback.message.edit_text(
         f"📈 *Покупка TON*\n\nЦена: ${price:.4f}\n\n"
-        f"💡 Безубыток для каждой суммы:\n"
+        f"💡 Безубыток для сумм:\n"
         f"• 0.1 TON → нужно +{calculate_breakeven(price, 0.1, price)['breakeven_percent']:.1f}%\n"
         f"• 0.5 TON → нужно +{calculate_breakeven(price, 0.5, price)['breakeven_percent']:.1f}%\n"
         f"• 1.0 TON → нужно +{calculate_breakeven(price, 1.0, price)['breakeven_percent']:.1f}%\n\n"
-        f"⚠️ Малые суммы невыгодны из-за комиссии!\n"
+        f"⚠️ Малые суммы невыгодны!\n"
         f"✏️ Можно ввести свою сумму",
         parse_mode="Markdown",
         reply_markup=buy_keyboard()
@@ -499,10 +501,10 @@ async def buy_ton_amount(callback: types.CallbackQuery):
         f"Цена: *${price:.4f}*\n"
         f"Стоимость: *${price * amount:.2f}*\n\n"
         f"💸 *Для безубытка:*\n"
-        f"• Нужна цена продажи: *${be['breakeven_price']:.4f}*\n"
         f"• Нужен рост: *+{be['breakeven_percent']:.2f}%*\n"
-        f"• Комиссия за сделку: *{be['total_fee_ton']} TON*\n\n"
-        f"{'⚠️ Для такой суммы нужен значительный рост!' if be['breakeven_percent'] > 2 else '✅ Приемлемый порог безубытка.'}",
+        f"• Цена продажи: *${be['breakeven_price']:.4f}*\n"
+        f"• Комиссия: *{be['total_fee_ton']} TON*\n\n"
+        f"{'⚠️ Большой % для безубытка!' if be['breakeven_percent'] > 2 else '✅ Приемлемый порог.'}",
         parse_mode="Markdown", reply_markup=keyboard
     )
 
@@ -563,16 +565,17 @@ async def buy_custom_prompt(callback: types.CallbackQuery):
     
     await callback.message.edit_text(
         "✏️ *Введите сумму покупки в TON*\n\n"
-        "Просто отправьте число, например: `0.75` или `2`\n\n"
-        "⚠️ Минимум 0.1 TON\n"
-        "⚠️ Помните о комиссии — малые суммы невыгодны",
+        "Отправьте число в чат, например: `0.75` или `2`\n\n"
+        "⚠️ Минимум 0.1 TON | Максимум 100 TON\n"
+        "⚠️ Малые суммы невыгодны из-за комиссии",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Отмена", callback_data="buy_ton")]
         ])
     )
 
-@dp.message(lambda message: user_sessions.get(message.from_user.id, {}).get('awaiting_input') == 'buy_amount')
+@dp.message(lambda message: message.text and message.text.replace('.', '').replace(',', '').isdigit() 
+             and user_sessions.get(message.from_user.id, {}).get('awaiting_input') == 'buy_amount')
 async def process_custom_buy(message: types.Message):
     user_id = message.from_user.id
     
@@ -612,9 +615,9 @@ async def process_custom_buy(message: types.Message):
         f"Цена: *${price:.4f}*\n"
         f"Стоимость: *${price * amount:.2f}*\n\n"
         f"💸 *Для безубытка:*\n"
-        f"• Нужна цена продажи: *${be['breakeven_price']:.4f}*\n"
-        f"• Нужен рост: *+{be['breakeven_percent']:.2f}%*\n\n"
-        f"{'⚠️ Малый объём — большой % для безубытка!' if be['breakeven_percent'] > 3 else '✅ Приемлемый порог безубытка.'}",
+        f"• Нужен рост: *+{be['breakeven_percent']:.2f}%*\n"
+        f"• Цена продажи: *${be['breakeven_price']:.4f}*\n\n"
+        f"{'⚠️ Большой процент для безубытка!' if be['breakeven_percent'] > 3 else '✅ Приемлемый порог.'}",
         parse_mode="Markdown", reply_markup=keyboard
     )
 
@@ -664,9 +667,8 @@ async def sell_ton_amount(callback: types.CallbackQuery):
         
         profit_text = (
             f"\n💸 *Результат с комиссией:*\n"
-            f"• Валовая прибыль: ${profit_data['gross_profit']:.4f}\n"
-            f"• Комиссия: {profit_data['total_fee_ton']} TON (${profit_data['fee_usd']:.4f})\n"
             f"• Чистая прибыль: *${profit_data['net_profit']:.4f}*\n"
+            f"• Комиссия: {profit_data['total_fee_ton']} TON (${profit_data['fee_usd']:.4f})\n"
             f"• {'✅ Прибыльно!' if profit_data['is_profitable'] else '❌ Убыточно!'}"
         )
     else:
@@ -726,8 +728,6 @@ async def sell_wallet(callback: types.CallbackQuery):
 async def sell_custom_prompt(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     session = user_sessions.get(user_id, {})
-    session['awaiting_input'] = 'sell_amount'
-    user_sessions[user_id] = session
     
     buy_positions = [p for p in session.get('positions', []) if p['type'] == 'BUY']
     sell_positions = [p for p in session.get('positions', []) if p['type'] == 'SELL']
@@ -735,10 +735,17 @@ async def sell_custom_prompt(callback: types.CallbackQuery):
     total_sold = sum(p['amount'] for p in sell_positions)
     balance = total_bought - total_sold
     
+    if balance <= 0:
+        await callback.answer("❌ У вас нет TON для продажи", show_alert=True)
+        return
+    
+    session['awaiting_input'] = 'sell_amount'
+    user_sessions[user_id] = session
+    
     await callback.message.edit_text(
         f"✏️ *Введите сумму продажи в TON*\n\n"
         f"Ваш баланс: *{balance:.2f} TON*\n\n"
-        f"Просто отправьте число, например: `0.75` или `1.5`\n\n"
+        f"Отправьте число в чат, например: `0.5` или `1.5`\n\n"
         f"⚠️ Не больше вашего баланса",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -746,7 +753,8 @@ async def sell_custom_prompt(callback: types.CallbackQuery):
         ])
     )
 
-@dp.message(lambda message: user_sessions.get(message.from_user.id, {}).get('awaiting_input') == 'sell_amount')
+@dp.message(lambda message: message.text and message.text.replace('.', '').replace(',', '').isdigit()
+             and user_sessions.get(message.from_user.id, {}).get('awaiting_input') == 'sell_amount')
 async def process_custom_sell(message: types.Message):
     user_id = message.from_user.id
     
@@ -783,9 +791,8 @@ async def process_custom_sell(message: types.Message):
         
         profit_text = (
             f"\n💸 *Результат с комиссией:*\n"
-            f"• Валовая прибыль: ${profit_data['gross_profit']:.4f}\n"
-            f"• Комиссия: {profit_data['total_fee_ton']} TON (${profit_data['fee_usd']:.4f})\n"
             f"• Чистая прибыль: *${profit_data['net_profit']:.4f}*\n"
+            f"• Комиссия: {profit_data['total_fee_ton']} TON (${profit_data['fee_usd']:.4f})\n"
             f"• {'✅ Прибыльно!' if profit_data['is_profitable'] else '❌ Убыточно!'}"
         )
     else:
@@ -994,6 +1001,11 @@ async def reset_history(callback: types.CallbackQuery):
 # ========== НАЗАД И ПОМОЩЬ ==========
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    session['awaiting_input'] = None
+    user_sessions[user_id] = session
+    
     await callback.message.edit_text("🤖 Главное меню:", reply_markup=main_keyboard())
 
 @dp.callback_query(lambda c: c.data == "help")
@@ -1001,11 +1013,11 @@ async def help_cmd(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "❓ *ПОМОЩЬ*\n\n"
         "• 💰 Цена — курс TON\n"
-        "• 📊 Теханализ — с учётом безубытка\n"
+        "• 📊 Теханализ — RSI + EMA\n"
         "• 📈/📉 Сделки — выбор суммы или своя\n"
         "• ✏️ Своя сумма — ввод любого числа\n"
         "• 💸 Безубыток — мин. цена для прибыли\n"
-        "• 🤖 Авто — сигналы только если выгодно\n\n"
+        "• 🤖 Авто — сигналы 24/7\n\n"
         f"Комиссия сети: {NETWORK_FEE} TON за транзакцию\n"
         "🔐 Ключи только у тебя!",
         parse_mode="Markdown", reply_markup=main_keyboard()
@@ -1163,11 +1175,11 @@ async def send_signal(user_id, signal_type, price, confidence, reason):
 
 # ========== ЗАПУСК ==========
 async def main():
-    print("🤖 TON Trading Bot v4.3 запущен!")
+    print("🤖 TON Trading Bot v4.4 запущен!")
     print(f"💸 Комиссия сети: {NETWORK_FEE} TON")
     print("📊 Сигналы с учётом безубытка")
     print("✏️ Своя сумма покупки/продажи")
-    print("✅ Сделки только если прибыль > комиссии")
+    print("✅ Исправлены зависания")
     
     for _ in range(20):
         price = await get_ton_price()
