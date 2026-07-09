@@ -1,7 +1,6 @@
 import asyncio
 import aiohttp
 import os
-import json
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (
@@ -13,9 +12,8 @@ from aiogram.filters import Command
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TONCONNECT_URL = "https://acewolfff.github.io/ton-trader-bot/tonconnect.html"
-MANIFEST_URL = "https://acewolfff.github.io/ton-trader-bot/tonconnect-manifest.json"
 
-# ========== ХРАНИЛИЩЕ ПОЛЬЗОВАТЕЛЕЙ ==========
+# ========== ХРАНИЛИЩЕ ==========
 user_sessions = {}
 
 # ========== БОТ ==========
@@ -25,8 +23,6 @@ dp = Dispatcher()
 # ========== ПОЛУЧЕНИЕ ЦЕНЫ TON ==========
 async def get_ton_price():
     """Получает цену TON из нескольких источников"""
-    
-    # Источник 1: CoinGecko
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -36,11 +32,10 @@ async def get_ton_price():
                 data = await resp.json()
                 price = data.get('the-open-network', {}).get('usd')
                 if price:
-                    return {"price": price, "volume": 0}
-    except Exception as e:
-        print(f"CoinGecko error: {e}")
+                    return price
+    except:
+        pass
     
-    # Источник 2: Binance
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -48,13 +43,10 @@ async def get_ton_price():
                 timeout=15
             ) as resp:
                 data = await resp.json()
-                price = float(data.get('price', 0))
-                if price:
-                    return {"price": price, "volume": 0}
-    except Exception as e:
-        print(f"Binance error: {e}")
+                return float(data.get('price', 0))
+    except:
+        pass
     
-    # Источник 3: Bybit
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -62,22 +54,121 @@ async def get_ton_price():
                 timeout=15
             ) as resp:
                 data = await resp.json()
-                price = float(data['result']['list'][0]['lastPrice'])
-                if price:
-                    return {"price": price, "volume": 0}
-    except Exception as e:
-        print(f"Bybit error: {e}")
+                return float(data['result']['list'][0]['lastPrice'])
+    except:
+        pass
     
     return None
+
+
+# ========== ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ (чистый Python) ==========
+class TechnicalIndicators:
+    def __init__(self):
+        self.price_history = []
+    
+    def add_price(self, price):
+        self.price_history.append(price)
+        if len(self.price_history) > 100:
+            self.price_history = self.price_history[-100:]
+    
+    def calculate_rsi(self, periods=14):
+        if len(self.price_history) < periods + 1:
+            return None
+        
+        gains, losses = [], []
+        for i in range(1, len(self.price_history)):
+            change = self.price_history[i] - self.price_history[i-1]
+            gains.append(change if change > 0 else 0)
+            losses.append(abs(change) if change < 0 else 0)
+        
+        avg_gain = sum(gains[-periods:]) / periods
+        avg_loss = sum(losses[-periods:]) / periods
+        
+        if avg_loss == 0:
+            return 100.0
+        
+        rs = avg_gain / avg_loss
+        return round(100 - (100 / (1 + rs)), 2)
+    
+    def calculate_sma(self, periods):
+        if len(self.price_history) < periods:
+            return None
+        return round(sum(self.price_history[-periods:]) / periods, 6)
+    
+    def calculate_ema(self, periods):
+        if len(self.price_history) < periods * 2:
+            return self.calculate_sma(periods)
+        
+        prices = self.price_history
+        sma = sum(prices[:periods]) / periods
+        multiplier = 2 / (periods + 1)
+        ema = sma
+        
+        for price in prices[periods:]:
+            ema = (price - ema) * multiplier + ema
+        
+        return round(ema, 6)
+    
+    def get_signal(self):
+        """Сводный сигнал на основе RSI и EMA"""
+        if len(self.price_history) < 21:
+            return None
+        
+        rsi = self.calculate_rsi()
+        ema9 = self.calculate_ema(9)
+        ema21 = self.calculate_ema(21)
+        current_price = self.price_history[-1]
+        
+        signals = []
+        
+        # RSI сигнал
+        if rsi and rsi >= 70:
+            signals.append(("SELL", 1))
+        elif rsi and rsi <= 30:
+            signals.append(("BUY", 1))
+        
+        # EMA сигнал
+        if ema9 and ema21:
+            if current_price > ema9 > ema21:
+                signals.append(("BUY", 2))  # Сильный бычий
+            elif current_price < ema9 < ema21:
+                signals.append(("SELL", 2))  # Сильный медвежий
+            elif ema9 > ema21:
+                signals.append(("BUY", 1))  # Бычий тренд
+            elif ema9 < ema21:
+                signals.append(("SELL", 1))  # Медвежий тренд
+        
+        if not signals:
+            return {"signal": "NEUTRAL", "confidence": 30, "rsi": rsi, "ema9": ema9, "ema21": ema21}
+        
+        # Суммируем сигналы
+        buy_score = sum(s[1] for s in signals if s[0] == "BUY")
+        sell_score = sum(s[1] for s in signals if s[0] == "SELL")
+        
+        total_score = buy_score - sell_score
+        
+        if total_score >= 2:
+            return {"signal": "BUY", "confidence": min(60 + abs(total_score) * 15, 95), "rsi": rsi, "ema9": ema9, "ema21": ema21}
+        elif total_score <= -2:
+            return {"signal": "SELL", "confidence": min(60 + abs(total_score) * 15, 95), "rsi": rsi, "ema9": ema9, "ema21": ema21}
+        else:
+            return {"signal": "NEUTRAL", "confidence": 40 + abs(total_score) * 10, "rsi": rsi, "ema9": ema9, "ema21": ema21}
+
+
+# Глобальный анализатор
+analyzer = TechnicalIndicators()
 
 
 # ========== КЛАВИАТУРЫ ==========
 def main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Цена TON", callback_data="check_price")],
+        [InlineKeyboardButton(text="📊 Теханализ", callback_data="tech_analysis")],
         [InlineKeyboardButton(text="📈 Купить TON", callback_data="buy_ton")],
         [InlineKeyboardButton(text="📉 Продать TON", callback_data="sell_ton")],
+        [InlineKeyboardButton(text="🤖 Авто-трейдинг", callback_data="auto_trade")],
         [InlineKeyboardButton(text="📋 Портфель", callback_data="positions")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")],
         [InlineKeyboardButton(text="❓ Помощь", callback_data="help")]
     ])
 
@@ -86,7 +177,7 @@ def buy_keyboard():
         [InlineKeyboardButton(text="0.1 TON", callback_data="buy_amount_0.1")],
         [InlineKeyboardButton(text="0.5 TON", callback_data="buy_amount_0.5")],
         [InlineKeyboardButton(text="1.0 TON", callback_data="buy_amount_1.0")],
-        [InlineKeyboardButton(text="💳 Через кошелёк (Mini App)", callback_data="buy_wallet")],
+        [InlineKeyboardButton(text="💳 Через кошелёк", callback_data="buy_wallet")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
     ])
 
@@ -95,7 +186,20 @@ def sell_keyboard():
         [InlineKeyboardButton(text="0.1 TON", callback_data="sell_amount_0.1")],
         [InlineKeyboardButton(text="0.5 TON", callback_data="sell_amount_0.5")],
         [InlineKeyboardButton(text="1.0 TON", callback_data="sell_amount_1.0")],
-        [InlineKeyboardButton(text="💳 Через кошелёк (Mini App)", callback_data="sell_wallet")],
+        [InlineKeyboardButton(text="💳 Через кошелёк", callback_data="sell_wallet")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+    ])
+
+def auto_keyboard(user_id):
+    session = user_sessions.get(user_id, {})
+    auto_status = "✅" if session.get('auto_trade') else "❌"
+    dca_status = "✅" if session.get('dca_enabled') else "❌"
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Авто-сигналы: {auto_status}", callback_data="toggle_auto")],
+        [InlineKeyboardButton(text=f"DCA: {dca_status}", callback_data="toggle_dca")],
+        [InlineKeyboardButton(text="🎯 Тейк-профит: " + str(session.get('tp_percent', 3)) + "%", callback_data="setup_tp")],
+        [InlineKeyboardButton(text="🛑 Стоп-лосс: " + str(session.get('sl_percent', 7)) + "%", callback_data="setup_sl")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
     ])
 
@@ -107,43 +211,57 @@ async def cmd_start(message: types.Message):
     
     user_sessions[user_id] = {
         'last_price': None,
+        'base_price': None,
         'positions': [],
+        'auto_trade': False,
+        'dca_enabled': False,
+        'dca_config': {
+            'total_amount': 1.0,
+            'parts': 3,
+            'drop_percent': 1.5,
+            'bought_parts': 0,
+            'buy_prices': []
+        },
+        'tp_percent': 3.0,
+        'sl_percent': 7.0,
         'alerts_enabled': True
     }
     
     await message.answer(
-        "🤖 *TON Trading Bot*\n\n"
-        "Я помогаю торговать TON прямо в Telegram.\n\n"
-        "• 💰 Проверить цену\n"
-        "• 📈 Купить TON\n"
-        "• 📉 Продать TON\n"
-        "• 💳 Подтверждение через кошелёк\n\n"
+        "🤖 *TON Trading Bot v4.0*\n\n"
+        "Полный функционал:\n"
+        "• 💰 Цена TON в реальном времени\n"
+        "• 📊 Теханализ (RSI, EMA)\n"
+        "• 📈/📉 Покупка и продажа\n"
+        "• 💳 Подтверждение через кошелёк\n"
+        "• 🤖 Авто-трейдинг 24/7\n"
+        "• 📊 DCA стратегия\n"
+        "• 🎯 Тейк-профит и стоп-лосс\n\n"
         "Выбери действие:",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
 
 
-# ========== ПРОВЕРКА ЦЕНЫ ==========
+# ========== ЦЕНА TON ==========
 @dp.callback_query(lambda c: c.data == "check_price")
 async def check_price(callback: types.CallbackQuery):
-    await callback.answer("⏳ Загружаю цену...")
+    await callback.answer("⏳ Загружаю...")
     
-    data = await get_ton_price()
+    price = await get_ton_price()
+    user_id = callback.from_user.id
     
-    if not data:
-        await callback.message.edit_text(
-            "❌ Не удалось получить цену. Попробуй позже.",
-            reply_markup=main_keyboard()
-        )
+    if not price:
+        await callback.message.edit_text("❌ Не удалось получить цену.", reply_markup=main_keyboard())
         return
     
-    price = data["price"]
-    user_id = callback.from_user.id
     session = user_sessions.get(user_id, {})
     old_price = session.get('last_price')
     session['last_price'] = price
     user_sessions[user_id] = session
+    
+    # Добавляем в анализатор
+    analyzer.add_price(price)
     
     change_text = ""
     if old_price:
@@ -152,22 +270,86 @@ async def check_price(callback: types.CallbackQuery):
         change_text = f"\nИзменение: {emoji} {change:+.2f}%"
     
     await callback.message.edit_text(
-        f"💰 *TON / USD*\n\n"
-        f"Текущая цена: *${price:.4f}*{change_text}\n"
+        f"💰 *TON / USD*\n\nТекущая цена: *${price:.4f}*{change_text}\n"
         f"Обновлено: {datetime.now().strftime('%H:%M:%S')}",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
 
 
-# ========== ПОКУПКА TON ==========
+# ========== ТЕХАНАЛИЗ ==========
+@dp.callback_query(lambda c: c.data == "tech_analysis")
+async def tech_analysis(callback: types.CallbackQuery):
+    await callback.answer("⏳ Анализирую...")
+    
+    price = await get_ton_price()
+    if price:
+        analyzer.add_price(price)
+    
+    signal = analyzer.get_signal()
+    
+    if not signal:
+        await callback.message.edit_text(
+            "📊 Недостаточно данных для анализа. Нужно минимум 21 точка.\n"
+            "Проверяй цену чаще, чтобы накопить историю.",
+            reply_markup=main_keyboard()
+        )
+        return
+    
+    rsi = signal.get('rsi')
+    ema9 = signal.get('ema9')
+    ema21 = signal.get('ema21')
+    current = analyzer.price_history[-1]
+    
+    # Определяем эмодзи сигнала
+    if signal['signal'] == 'BUY':
+        sig_emoji = "🟢"
+        sig_text = "ПОКУПКА"
+    elif signal['signal'] == 'SELL':
+        sig_emoji = "🔴"
+        sig_text = "ПРОДАЖА"
+    else:
+        sig_emoji = "⚪"
+        sig_text = "НЕЙТРАЛЬНО"
+    
+    text = f"📊 *ТЕХНИЧЕСКИЙ АНАЛИЗ TON*\n\n"
+    text += f"Сигнал: {sig_emoji} *{sig_text}*\n"
+    text += f"Уверенность: *{signal['confidence']:.0f}%*\n\n"
+    text += f"💰 Цена: *${current:.4f}*\n"
+    
+    if rsi:
+        rsi_emoji = "🔴" if rsi >= 70 else ("🟢" if rsi <= 30 else "⚪")
+        text += f"📈 RSI(14): {rsi_emoji} *{rsi:.1f}*\n"
+        if rsi >= 70:
+            text += "   → Перекуплен (давление на продажу)\n"
+        elif rsi <= 30:
+            text += "   → Перепродан (давление на покупку)\n"
+    
+    if ema9 and ema21:
+        text += f"📉 EMA9: *${ema9:.4f}*\n"
+        text += f"📉 EMA21: *${ema21:.4f}*\n"
+        if ema9 > ema21:
+            text += "   → Бычий тренд 🟢\n"
+        else:
+            text += "   → Медвежий тренд 🔴\n"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить анализ", callback_data="tech_analysis")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+    ])
+    
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+# ========== ПОКУПКА ==========
 @dp.callback_query(lambda c: c.data == "buy_ton")
 async def buy_ton_menu(callback: types.CallbackQuery):
-    data = await get_ton_price()
-    price = data["price"] if data else 0
+    price = await get_ton_price()
+    if price:
+        analyzer.add_price(price)
     
     await callback.message.edit_text(
-        f"📈 *Покупка TON*\n\nТекущая цена: ${price:.4f}\n\nВыбери сумму или купи через кошелёк:",
+        f"📈 *Покупка TON*\n\nЦена: ${price:.4f}\n\nВыбери сумму:",
         parse_mode="Markdown",
         reply_markup=buy_keyboard()
     )
@@ -175,8 +357,7 @@ async def buy_ton_menu(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("buy_amount_"))
 async def buy_ton_amount(callback: types.CallbackQuery):
     amount = float(callback.data.replace("buy_amount_", ""))
-    data = await get_ton_price()
-    price = data["price"] if data else 0
+    price = await get_ton_price()
     user_id = callback.from_user.id
     
     if not price:
@@ -189,94 +370,63 @@ async def buy_ton_amount(callback: types.CallbackQuery):
     ])
     
     await callback.message.edit_text(
-        f"📈 *ПОДТВЕРЖДЕНИЕ ПОКУПКИ*\n\n"
-        f"Сумма: *{amount} TON*\n"
-        f"Цена: *${price:.4f}*\n"
-        f"Итого: *${price * amount:.2f}*\n\n"
-        f"Нажми «Подтверждаю» чтобы записать сделку в портфель.",
-        parse_mode="Markdown",
-        reply_markup=keyboard
+        f"📈 *ПОДТВЕРЖДЕНИЕ*\n\nСумма: *{amount} TON*\nЦена: *${price:.4f}*\nИтого: *${price * amount:.2f}*",
+        parse_mode="Markdown", reply_markup=keyboard
     )
 
 @dp.callback_query(lambda c: c.data.startswith("buy_confirm_"))
 async def buy_confirm(callback: types.CallbackQuery):
     amount = float(callback.data.replace("buy_confirm_", ""))
-    data = await get_ton_price()
-    price = data["price"] if data else 0
+    price = await get_ton_price()
     user_id = callback.from_user.id
     
     session = user_sessions.get(user_id, {'positions': []})
     session['positions'].append({
-        'type': 'BUY',
-        'amount': amount,
-        'price': price,
-        'time': datetime.now().isoformat()
+        'type': 'BUY', 'amount': amount, 'price': price,
+        'time': datetime.now().isoformat(),
+        'tp_percent': session.get('tp_percent', 3.0),
+        'sl_percent': session.get('sl_percent', 7.0)
     })
+    if not session.get('base_price'):
+        session['base_price'] = price
     user_sessions[user_id] = session
     
     await callback.message.edit_text(
-        f"✅ *ПОКУПКА СОВЕРШЕНА*\n\n"
-        f"Куплено: *{amount} TON*\n"
-        f"По цене: *${price:.4f}*\n"
-        f"Сумма: *${price * amount:.2f}*\n\n"
-        f"Позиция добавлена в портфель 📋",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
+        f"✅ *КУПЛЕНО {amount} TON* по ${price:.4f}\nПозиция в портфеле 📋",
+        parse_mode="Markdown", reply_markup=main_keyboard()
     )
 
 @dp.callback_query(lambda c: c.data == "buy_wallet")
 async def buy_wallet(callback: types.CallbackQuery):
-    """Покупка через кошелёк TonConnect"""
-    data = await get_ton_price()
-    price = data["price"] if data else 0
-    
-    if not price:
-        await callback.answer("❌ Не удалось получить цену", show_alert=True)
-        return
-    
+    price = await get_ton_price()
     webapp_url = f"{TONCONNECT_URL}?action=buy&amount=0.5&price={price}"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="💎 Открыть кошелёк для покупки",
-            web_app=WebAppInfo(url=webapp_url)
-        )],
+        [InlineKeyboardButton(text="💎 Открыть кошелёк", web_app=WebAppInfo(url=webapp_url))],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_ton")]
     ])
     
     await callback.message.edit_text(
-        f"💳 *ПОКУПКА ЧЕРЕЗ КОШЕЛЁК*\n\n"
-        f"Нажми кнопку ниже чтобы открыть Mini App.\n"
-        f"Там ты подключишь кошелёк и подтвердишь транзакцию.\n\n"
-        f"Цена: *${price:.4f}*\n"
-        f"Сумма: *0.5 TON*\n\n"
-        f"🔐 Твои ключи остаются только в кошельке!",
-        parse_mode="Markdown",
-        reply_markup=keyboard
+        f"💳 *ПОКУПКА ЧЕРЕЗ КОШЕЛЁК*\n\nЦена: ${price:.4f}\nСумма: 0.5 TON\n\n"
+        "Нажми кнопку, подключи кошелёк и подтверди транзакцию.\n"
+        "🔐 Ключи только у тебя!",
+        parse_mode="Markdown", reply_markup=keyboard
     )
 
 
-# ========== ПРОДАЖА TON ==========
+# ========== ПРОДАЖА ==========
 @dp.callback_query(lambda c: c.data == "sell_ton")
 async def sell_ton_menu(callback: types.CallbackQuery):
-    data = await get_ton_price()
-    price = data["price"] if data else 0
-    
+    price = await get_ton_price()
     await callback.message.edit_text(
-        f"📉 *Продажа TON*\n\nТекущая цена: ${price:.4f}\n\nВыбери сумму или продай через кошелёк:",
-        parse_mode="Markdown",
-        reply_markup=sell_keyboard()
+        f"📉 *Продажа TON*\n\nЦена: ${price:.4f}\n\nВыбери сумму:",
+        parse_mode="Markdown", reply_markup=sell_keyboard()
     )
 
 @dp.callback_query(lambda c: c.data.startswith("sell_amount_"))
 async def sell_ton_amount(callback: types.CallbackQuery):
     amount = float(callback.data.replace("sell_amount_", ""))
-    data = await get_ton_price()
-    price = data["price"] if data else 0
-    
-    if not price:
-        await callback.answer("❌ Не удалось получить цену", show_alert=True)
-        return
+    price = await get_ton_price()
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Подтверждаю", callback_data=f"sell_confirm_{amount}")],
@@ -284,69 +434,127 @@ async def sell_ton_amount(callback: types.CallbackQuery):
     ])
     
     await callback.message.edit_text(
-        f"📉 *ПОДТВЕРЖДЕНИЕ ПРОДАЖИ*\n\n"
-        f"Сумма: *{amount} TON*\n"
-        f"Цена: *${price:.4f}*\n"
-        f"Ты получишь: *${price * amount:.2f}*\n\n"
-        f"Нажми «Подтверждаю» чтобы записать сделку в портфель.",
-        parse_mode="Markdown",
-        reply_markup=keyboard
+        f"📉 *ПОДТВЕРЖДЕНИЕ*\n\nСумма: *{amount} TON*\nЦена: *${price:.4f}*\nПолучишь: *${price * amount:.2f}*",
+        parse_mode="Markdown", reply_markup=keyboard
     )
 
 @dp.callback_query(lambda c: c.data.startswith("sell_confirm_"))
 async def sell_confirm(callback: types.CallbackQuery):
     amount = float(callback.data.replace("sell_confirm_", ""))
-    data = await get_ton_price()
-    price = data["price"] if data else 0
+    price = await get_ton_price()
     user_id = callback.from_user.id
     
     session = user_sessions.get(user_id, {'positions': []})
     session['positions'].append({
-        'type': 'SELL',
-        'amount': amount,
-        'price': price,
+        'type': 'SELL', 'amount': amount, 'price': price,
         'time': datetime.now().isoformat()
     })
     user_sessions[user_id] = session
     
     await callback.message.edit_text(
-        f"✅ *ПРОДАЖА СОВЕРШЕНА*\n\n"
-        f"Продано: *{amount} TON*\n"
-        f"По цене: *${price:.4f}*\n"
-        f"Получено: *${price * amount:.2f}*",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
+        f"✅ *ПРОДАНО {amount} TON* по ${price:.4f}",
+        parse_mode="Markdown", reply_markup=main_keyboard()
     )
 
 @dp.callback_query(lambda c: c.data == "sell_wallet")
 async def sell_wallet(callback: types.CallbackQuery):
-    """Продажа через кошелёк TonConnect"""
-    data = await get_ton_price()
-    price = data["price"] if data else 0
-    
-    if not price:
-        await callback.answer("❌ Не удалось получить цену", show_alert=True)
-        return
-    
+    price = await get_ton_price()
     webapp_url = f"{TONCONNECT_URL}?action=sell&amount=0.5&price={price}"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="💰 Открыть кошелёк для продажи",
-            web_app=WebAppInfo(url=webapp_url)
-        )],
+        [InlineKeyboardButton(text="💰 Открыть кошелёк", web_app=WebAppInfo(url=webapp_url))],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="sell_ton")]
     ])
     
     await callback.message.edit_text(
-        f"💳 *ПРОДАЖА ЧЕРЕЗ КОШЕЛЁК*\n\n"
-        f"Нажми кнопку ниже чтобы открыть Mini App.\n"
-        f"Подтверди транзакцию в кошельке.\n\n"
-        f"Цена: *${price:.4f}*\n"
-        f"Сумма: *0.5 TON*",
-        parse_mode="Markdown",
-        reply_markup=keyboard
+        f"💳 *ПРОДАЖА ЧЕРЕЗ КОШЕЛЁК*\n\nЦена: ${price:.4f}\nСумма: 0.5 TON\n\n"
+        "Нажми кнопку, подключи кошелёк и подтверди транзакцию.",
+        parse_mode="Markdown", reply_markup=keyboard
     )
+
+
+# ========== АВТО-ТРЕЙДИНГ ==========
+@dp.callback_query(lambda c: c.data == "auto_trade")
+async def auto_trade_menu(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    
+    await callback.message.edit_text(
+        f"🤖 *АВТО-ТРЕЙДИНГ*\n\n"
+        f"Авто-сигналы: {'✅' if session.get('auto_trade') else '❌'}\n"
+        f"DCA: {'✅' if session.get('dca_enabled') else '❌'}\n"
+        f"Тейк-профит: {session.get('tp_percent', 3)}%\n"
+        f"Стоп-лосс: {session.get('sl_percent', 7)}%\n\n"
+        f"Выбери настройку:",
+        parse_mode="Markdown",
+        reply_markup=auto_keyboard(user_id)
+    )
+
+@dp.callback_query(lambda c: c.data == "toggle_auto")
+async def toggle_auto(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    session['auto_trade'] = not session.get('auto_trade', False)
+    user_sessions[user_id] = session
+    await callback.answer(f"Авто-сигналы {'включены' if session['auto_trade'] else 'выключены'}", show_alert=True)
+    await auto_trade_menu(callback)
+
+@dp.callback_query(lambda c: c.data == "toggle_dca")
+async def toggle_dca(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    session['dca_enabled'] = not session.get('dca_enabled', False)
+    if session['dca_enabled']:
+        price = await get_ton_price()
+        if price:
+            session['base_price'] = price
+    user_sessions[user_id] = session
+    await callback.answer(f"DCA {'включен' if session['dca_enabled'] else 'выключен'}", show_alert=True)
+    await auto_trade_menu(callback)
+
+@dp.callback_query(lambda c: c.data == "setup_tp")
+async def setup_tp(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "🎯 *ТЕЙК-ПРОФИТ*\n\nПри каком росте сигнализировать о продаже?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="2%", callback_data="tp_2"), InlineKeyboardButton(text="3%", callback_data="tp_3")],
+            [InlineKeyboardButton(text="5%", callback_data="tp_5"), InlineKeyboardButton(text="10%", callback_data="tp_10")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="auto_trade")]
+        ])
+    )
+
+@dp.callback_query(lambda c: c.data.startswith("tp_"))
+async def set_tp(callback: types.CallbackQuery):
+    tp = float(callback.data.replace("tp_", ""))
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    session['tp_percent'] = tp
+    user_sessions[user_id] = session
+    await callback.answer(f"Тейк-профит: {tp}%", show_alert=True)
+    await auto_trade_menu(callback)
+
+@dp.callback_query(lambda c: c.data == "setup_sl")
+async def setup_sl(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "🛑 *СТОП-ЛОСС*\n\nПри каком падении сигнализировать о продаже?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="5%", callback_data="sl_5"), InlineKeyboardButton(text="7%", callback_data="sl_7")],
+            [InlineKeyboardButton(text="10%", callback_data="sl_10"), InlineKeyboardButton(text="15%", callback_data="sl_15")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="auto_trade")]
+        ])
+    )
+
+@dp.callback_query(lambda c: c.data.startswith("sl_"))
+async def set_sl(callback: types.CallbackQuery):
+    sl = float(callback.data.replace("sl_", ""))
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    session['sl_percent'] = sl
+    user_sessions[user_id] = session
+    await callback.answer(f"Стоп-лосс: {sl}%", show_alert=True)
+    await auto_trade_menu(callback)
 
 
 # ========== ПОРТФЕЛЬ ==========
@@ -355,90 +563,219 @@ async def show_positions(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     session = user_sessions.get(user_id, {})
     positions = session.get('positions', [])
-    data = await get_ton_price()
-    price = data["price"] if data else 0
+    price = await get_ton_price()
     
     if not positions:
-        await callback.message.edit_text(
-            "📋 *ПОРТФЕЛЬ ПУСТ*\n\nУ тебя нет открытых позиций.\nНачни с покупки TON! 📈",
-            parse_mode="Markdown",
-            reply_markup=main_keyboard()
-        )
+        await callback.message.edit_text("📋 Портфель пуст.", reply_markup=main_keyboard())
         return
     
-    buy_positions = [p for p in positions if p['type'] == 'BUY']
-    sell_positions = [p for p in positions if p['type'] == 'SELL']
-    
-    total_bought = sum(p['amount'] for p in buy_positions)
-    total_spent = sum(p['amount'] * p['price'] for p in buy_positions)
-    total_sold = sum(p['amount'] for p in sell_positions)
-    total_received = sum(p['amount'] * p['price'] for p in sell_positions)
-    
-    avg_buy_price = total_spent / total_bought if total_bought > 0 else 0
+    buy_pos = [p for p in positions if p['type'] == 'BUY']
+    sell_pos = [p for p in positions if p['type'] == 'SELL']
+    total_bought = sum(p['amount'] for p in buy_pos)
+    total_sold = sum(p['amount'] for p in sell_pos)
     balance = total_bought - total_sold
-    current_value = balance * price if price else 0
     
-    text = "📋 *ПОРТФЕЛЬ*\n\n"
-    text += f"💰 Баланс: *{balance:.2f} TON*\n"
-    text += f"💵 Стоимость: *${current_value:.2f}*\n\n"
-    text += f"📈 Куплено: {total_bought:.2f} TON\n"
-    text += f"📉 Продано: {total_sold:.2f} TON\n"
+    text = f"📋 *ПОРТФЕЛЬ*\n\n💰 Баланс: *{balance:.2f} TON* (${balance * price:.2f})\n"
+    text += f"📈 Куплено: {total_bought:.2f} TON\n📉 Продано: {total_sold:.2f} TON"
     
-    if avg_buy_price > 0:
-        text += f"📊 Средняя цена покупки: ${avg_buy_price:.4f}\n"
-    
-    if balance > 0 and price:
-        pnl = (price - avg_buy_price) * balance
-        emoji = "🟢" if pnl >= 0 else "🔴"
-        text += f"📊 P&L: {emoji} ${pnl:+.2f}"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
+
+
+# ========== НАСТРОЙКИ ==========
+@dp.callback_query(lambda c: c.data == "settings")
+async def settings_menu(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
     
     await callback.message.edit_text(
-        text,
+        f"⚙️ *НАСТРОЙКИ*\n\n"
+        f"🔔 Сигналы: {'✅' if session.get('alerts_enabled', True) else '❌'}\n"
+        f"🤖 Авто-трейдинг: {'✅' if session.get('auto_trade') else '❌'}\n"
+        f"📊 DCA: {'✅' if session.get('dca_enabled') else '❌'}",
         parse_mode="Markdown",
-        reply_markup=main_keyboard()
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔔 Сигналы вкл/выкл", callback_data="toggle_alerts")],
+            [InlineKeyboardButton(text="🗑 Сбросить историю", callback_data="reset_history")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+        ])
     )
 
+@dp.callback_query(lambda c: c.data == "toggle_alerts")
+async def toggle_alerts(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    session['alerts_enabled'] = not session.get('alerts_enabled', True)
+    user_sessions[user_id] = session
+    await callback.answer(f"Сигналы {'включены' if session['alerts_enabled'] else 'выключены'}", show_alert=True)
+    await settings_menu(callback)
 
-# ========== НАЗАД ==========
+@dp.callback_query(lambda c: c.data == "reset_history")
+async def reset_history(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    session = user_sessions.get(user_id, {})
+    session['positions'] = []
+    session['base_price'] = None
+    user_sessions[user_id] = session
+    await callback.message.edit_text("🗑 История сброшена.", reply_markup=main_keyboard())
+
+
+# ========== НАЗАД И ПОМОЩЬ ==========
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "🤖 *Главное меню*\n\nВыбери действие:",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
-    )
+    await callback.message.edit_text("🤖 Главное меню:", reply_markup=main_keyboard())
 
-
-# ========== ПОМОЩЬ ==========
 @dp.callback_query(lambda c: c.data == "help")
 async def help_cmd(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "❓ *ПОМОЩЬ*\n\n"
-        "• 💰 Цена TON — текущий курс\n"
-        "• 📈 Купить TON — выбрать сумму и подтвердить\n"
-        "• 📉 Продать TON — выбрать сумму и подтвердить\n"
-        "• 💳 Через кошелёк — подтверждение через Tonkeeper\n"
-        "• 📋 Портфель — история сделок и баланс\n\n"
-        "🔐 Бот не имеет доступа к твоему кошельку.\n"
-        "Все сделки через кошелёк подтверждаешь ты.",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
+        "❓ *ПОМОЩЬ*\n\n• 💰 Цена — курс TON\n• 📊 Теханализ — RSI, EMA\n"
+        "• 📈/📉 Сделки — вручную или через кошелёк\n• 🤖 Авто — сигналы 24/7\n"
+        "• DCA — усреднение при падении\n• 🎯 Тейк-профит / 🛑 Стоп-лосс\n\n🔐 Ключи только у тебя!",
+        parse_mode="Markdown", reply_markup=main_keyboard()
     )
+
+
+# ========== ФОНОВЫЙ МОНИТОРИНГ ==========
+async def background_monitor():
+    """Фоновый мониторинг для авто-трейдинга"""
+    last_price = None
+    
+    while True:
+        await asyncio.sleep(60)  # Проверка каждую минуту
+        
+        price = await get_ton_price()
+        if not price:
+            continue
+        
+        analyzer.add_price(price)
+        
+        if not last_price:
+            last_price = price
+            continue
+        
+        change_pct = ((price - last_price) / last_price) * 100
+        signal = analyzer.get_signal()
+        
+        for user_id, session in user_sessions.items():
+            if not session.get('auto_trade'):
+                continue
+            
+            # Проверяем теханализ
+            if signal and signal['signal'] != 'NEUTRAL' and signal['confidence'] >= 60:
+                await send_signal(user_id, signal['signal'], price, signal['confidence'], "теханализу")
+            # Или простой процент
+            elif change_pct <= -1:
+                await send_signal(user_id, 'BUY', price, 70, f"падению на {abs(change_pct):.1f}%")
+            elif change_pct >= 2:
+                await send_signal(user_id, 'SELL', price, 70, f"росту на {change_pct:.1f}%")
+            
+            # DCA
+            if session.get('dca_enabled'):
+                base_price = session.get('base_price', price)
+                drop = ((base_price - price) / base_price) * 100
+                dca = session.get('dca_config', {})
+                
+                if drop >= dca.get('drop_percent', 1.5) * (dca.get('bought_parts', 0) + 1):
+                    if dca.get('bought_parts', 0) < dca.get('parts', 3):
+                        part_amount = dca.get('total_amount', 1.0) / dca.get('parts', 3)
+                        try:
+                            await bot.send_message(
+                                user_id,
+                                f"📊 *DCA СИГНАЛ*\nПадение на {drop:.1f}%\n"
+                                f"Покупка части {dca['bought_parts'] + 1}/{dca['parts']}: *{part_amount:.2f} TON*\n"
+                                f"Цена: ${price:.4f}",
+                                parse_mode="Markdown"
+                            )
+                            dca['bought_parts'] += 1
+                            dca['buy_prices'].append(price)
+                            session['dca_config'] = dca
+                        except:
+                            pass
+            
+            # Тейк-профит и стоп-лосс
+            for pos in session.get('positions', []):
+                if pos['type'] != 'BUY':
+                    continue
+                
+                profit = ((price - pos['price']) / pos['price']) * 100
+                
+                if profit >= session.get('tp_percent', 3):
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            f"🎯 *ТЕЙК-ПРОФИТ!* +{profit:.1f}%\n"
+                            f"Покупка: ${pos['price']:.4f} → Сейчас: ${price:.4f}\n"
+                            f"Прибыль: ${(price - pos['price']) * pos['amount']:.2f}",
+                            parse_mode="Markdown",
+                            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                                [InlineKeyboardButton(text="💰 Продать", callback_data=f"sell_amount_{pos['amount']}")]
+                            ])
+                        )
+                    except:
+                        pass
+                
+                elif profit <= -session.get('sl_percent', 7):
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            f"🛑 *СТОП-ЛОСС!* {profit:.1f}%\n"
+                            f"Покупка: ${pos['price']:.4f} → Сейчас: ${price:.4f}\n"
+                            f"Убыток: ${(price - pos['price']) * pos['amount']:.2f}",
+                            parse_mode="Markdown",
+                            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                                [InlineKeyboardButton(text="🛑 Продать", callback_data=f"sell_amount_{pos['amount']}")]
+                            ])
+                        )
+                    except:
+                        pass
+        
+        last_price = price
+
+
+async def send_signal(user_id, signal_type, price, confidence, reason):
+    """Отправляет торговый сигнал"""
+    emoji = "🟢" if signal_type == 'BUY' else "🔴"
+    action = "ПОКУПКУ" if signal_type == 'BUY' else "ПРОДАЖУ"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"{'💎 Купить' if signal_type == 'BUY' else '💰 Продать'} 0.5 TON",
+            callback_data=f"{'buy' if signal_type == 'BUY' else 'sell'}_amount_0.5"
+        )],
+        [InlineKeyboardButton(text="📊 Теханализ", callback_data="tech_analysis")],
+        [InlineKeyboardButton(text="🔙 Игнорировать", callback_data="back_to_main")]
+    ])
+    
+    try:
+        await bot.send_message(
+            user_id,
+            f"🔔 *СИГНАЛ НА {action}*\n\n{emoji} По {reason}\n"
+            f"Цена: *${price:.4f}*\nУверенность: *{confidence:.0f}%*",
+            parse_mode="Markdown", reply_markup=keyboard
+        )
+    except:
+        pass
 
 
 # ========== ЗАПУСК ==========
 async def main():
-    print("🤖 TON Trading Bot запущен!")
-    print(f"🔗 Mini App URL: {TONCONNECT_URL}")
-    print(f"📋 Manifest URL: {MANIFEST_URL}")
+    print("🤖 TON Trading Bot v4.0 запущен!")
+    print("📊 Теханализ: RSI + EMA")
+    print("🤖 Авто-трейдинг: включен")
+    print("📊 DCA, Тейк-профит, Стоп-лосс: активны")
     
-    # Проверяем подключение к API
-    data = await get_ton_price()
-    if data:
-        print(f"✅ API работает. TON = ${data['price']:.4f}")
-    else:
-        print("⚠️ API не отвечает, но бот запущен")
+    # Загружаем начальные данные
+    for _ in range(20):
+        price = await get_ton_price()
+        if price:
+            analyzer.add_price(price)
+        await asyncio.sleep(1)
     
+    print(f"✅ Загружено {len(analyzer.price_history)} точек данных")
+    
+    # Запускаем мониторинг
+    asyncio.create_task(background_monitor())
+    
+    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
