@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TON Trader - Подтверждение</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f1a;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        .card {
+            background: #1a1a35;
+            border-radius: 20px;
+            padding: 30px 20px;
+            border: 1px solid #2a2a4a;
+            margin-bottom: 16px;
+        }
+
+        .emoji {
+            font-size: 60px;
+            margin-bottom: 12px;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #00d4aa;
+        }
+
+        .info {
+            font-size: 14px;
+            opacity: 0.8;
+            margin-bottom: 6px;
+            line-height: 1.5;
+        }
+
+        .amount {
+            font-size: 28px;
+            font-weight: bold;
+            color: #00d4aa;
+            margin: 12px 0;
+        }
+
+        .details {
+            font-size: 13px;
+            opacity: 0.6;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: transform 0.2s;
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        .btn-confirm {
+            background: linear-gradient(135deg, #00d4aa, #00b894);
+            color: #000;
+        }
+
+        .btn-cancel {
+            background: #2a2a4a;
+            color: #ff6666;
+        }
+
+        #ton-connect {
+            margin-bottom: 16px;
+        }
+
+        .status {
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-top: 12px;
+            display: none;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .status.success {
+            background: #0a3d2e;
+            color: #00ff88;
+        }
+
+        .status.error {
+            background: #3d0a0a;
+            color: #ff6666;
+        }
+
+        .status.info {
+            background: #1a1a35;
+            color: #00d4aa;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Шаг 1: Подтверждение -->
+        <div id="step-confirm">
+            <div class="card">
+                <div class="emoji" id="action-emoji">💎</div>
+                <div class="title" id="action-title">Покупка TON</div>
+                <div class="amount" id="action-amount">0.5 TON</div>
+                <div class="info" id="action-price">По цене: $2.5000</div>
+                <div class="details" id="action-total">Итого: $1.25</div>
+            </div>
+
+            <div id="ton-connect"></div>
+            
+            <div id="status" class="status"></div>
+            
+            <button class="btn btn-confirm hidden" id="btn-send" onclick="sendTransaction()">
+                📤 Отправить транзакцию
+            </button>
+            
+            <button class="btn btn-cancel" onclick="closeApp()">
+                ❌ Отмена
+            </button>
+        </div>
+
+        <!-- Шаг 2: Успех -->
+        <div id="step-success" class="hidden">
+            <div class="card">
+                <div class="emoji">✅</div>
+                <div class="title">Транзакция отправлена!</div>
+                <div class="info">Проверь статус в кошельке</div>
+            </div>
+            <button class="btn btn-confirm" onclick="closeApp()">
+                Закрыть
+            </button>
+        </div>
+    </div>
+
+    <!-- TonConnect SDK -->
+    <script src="https://unpkg.com/@tonconnect/ui@2.0.11/dist/tonconnect-ui.min.js"></script>
+    
+    <script>
+        // ========== ПОЛУЧАЕМ ПАРАМЕТРЫ ИЗ URL ==========
+        const params = new URLSearchParams(window.location.search);
+        const action = params.get('action') || 'buy';  // buy или sell
+        const amount = parseFloat(params.get('amount')) || 0.5;
+        const price = parseFloat(params.get('price')) || 0;
+        const total = (amount * price).toFixed(2);
+        
+        // Адрес для транзакций (замени на свой!)
+        const WALLET_ADDRESS = 'EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs';
+        
+        // ========== ОБНОВЛЯЕМ ИНТЕРФЕЙС ==========
+        document.getElementById('action-emoji').textContent = action === 'buy' ? '💎' : '💰';
+        document.getElementById('action-title').textContent = action === 'buy' ? 'Покупка TON' : 'Продажа TON';
+        document.getElementById('action-amount').textContent = `${amount} TON`;
+        document.getElementById('action-price').textContent = `По цене: $${price.toFixed(4)}`;
+        document.getElementById('action-total').textContent = `Итого: $${total}`;
+        
+        // ========== TON CONNECT ==========
+        let tonConnectUI = null;
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+                manifestUrl: 'https://твой-домен.ru/tonconnect-manifest.json',
+                buttonRootId: 'ton-connect'
+            });
+            
+            tonConnectUI.onStatusChange(wallet => {
+                const btnSend = document.getElementById('btn-send');
+                const status = document.getElementById('status');
+                
+                if (wallet) {
+                    btnSend.classList.remove('hidden');
+                    showStatus('Кошелёк подключен. Нажми «Отправить»', 'info');
+                } else {
+                    btnSend.classList.add('hidden');
+                    showStatus('Подключи кошелёк чтобы продолжить', 'info');
+                }
+            });
+        });
+        
+        // ========== ОТПРАВКА ТРАНЗАКЦИИ ==========
+        async function sendTransaction() {
+            const status = document.getElementById('status');
+            const btnSend = document.getElementById('btn-send');
+            
+            if (!tonConnectUI || !tonConnectUI.wallet) {
+                showStatus('Сначала подключи кошелёк!', 'error');
+                return;
+            }
+            
+            btnSend.disabled = true;
+            btnSend.textContent = '⏳ Отправка...';
+            showStatus('Подтверди транзакцию в кошельке...', 'info');
+            
+            try {
+                const amountInNanoton = Math.floor(amount * 1_000_000_000);
+                
+                const transaction = {
+                    validUntil: Math.floor(Date.now() / 1000) + 600,
+                    messages: [{
+                        address: WALLET_ADDRESS,
+                        amount: amountInNanoton.toString(),
+                        payload: ''
+                    }]
+                };
+                
+                const result = await tonConnectUI.sendTransaction(transaction);
+                
+                document.getElementById('step-confirm').classList.add('hidden');
+                document.getElementById('step-success').classList.remove('hidden');
+                
+                // Отправляем сообщение в Telegram что сделка подтверждена
+                if (window.Telegram && window.Telegram.WebApp) {
+                    window.Telegram.WebApp.sendData(JSON.stringify({
+                        status: 'success',
+                        action: action,
+                        amount: amount,
+                        price: price,
+                        tx: result.boc.slice(0, 30)
+                    }));
+                }
+            } catch (e) {
+                if (e.message.includes('rejected')) {
+                    showStatus('Транзакция отменена', 'error');
+                } else {
+                    showStatus('Ошибка: ' + e.message, 'error');
+                }
+                btnSend.disabled = false;
+                btnSend.textContent = '📤 Отправить транзакцию';
+            }
+        }
+        
+        function showStatus(text, type) {
+            const el = document.getElementById('status');
+            el.textContent = text;
+            el.className = 'status show ' + type;
+            
+            if (type === 'success' || type === 'error') {
+                setTimeout(() => {
+                    el.className = 'status';
+                }, 5000);
+            }
+        }
+        
+        function closeApp() {
+            if (window.Telegram && window.Telegram.WebApp) {
+                window.Telegram.WebApp.close();
+            } else {
+                window.close();
+            }
+        }
+    </script>
+</body>
+</html>
